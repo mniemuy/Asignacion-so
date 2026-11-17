@@ -1,10 +1,25 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 #include <unistd.h>
 #include <string.h>
 
 
+typedef struct {
+    int id;
+    int size;
+    int *bloques;
+    int nBloques;
+} Archivo;
+
+
+typedef struct { //para representar el disco
+int ocupado; //bloque libre o ocupado? como un bitmap
+int fileid;   // para saber qué archivo corresponde a cada bloque
+} Bloque;
+
 int main(){
+
 int tdisco = 0;
 int tbloque = 0;
 int metodo = 0;
@@ -35,9 +50,23 @@ if(tdisco <= 0 || tbloque <= 0 || tdisco*1024 < tbloque){
 }
 
 int bloques = (tdisco*1024)/tbloque;
+//acá podemos ocupar arreglos o malloc
 
+//según leí si el usuario se pasa con el tamaño del disco a varios GB puede provocar un stack overflow
+//el heap normalmente puede crecer más, entonces podemos usar memoria dinámica en vez de un arreglo
 printf("Cantidad de bloques%d\n", bloques);
 
+Bloque *disco = malloc(bloques * sizeof(Bloque));
+
+if (disco == NULL) {
+    printf("Error de reserva de memoria\n");
+    return 1;
+}
+
+for (int i = 0; i < bloques; i++) {
+    disco[i].ocupado = 0;
+    disco[i].fileid = -1;  //inicialización de campos como ninguno ocupado y todos los fileid en -1
+}
 
 printf("Elige un método de asignación\n");
 //prefiero dejar el método de asignación como opciones
@@ -66,6 +95,8 @@ bloquesR = ceil((double)tarchivo/tbloque); //el double porque si no trunca antes
 //printf("Y el método es: %s\n", metodo);
 
 //printf("Hola");
+
+free(disco);
     return 0;
 }
 
