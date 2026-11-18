@@ -1,9 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
-#include <unistd.h>
-#include <string.h>
-#include <time.h> //para la semilla de rand()
+#include <math.h> //por el ceil hay que compilar con -lm al final, si no da error al linkear
+#include <unistd.h> //para el sleep de los 2 segundos, es de unix, no estaba en los pdf
+#include <string.h> //por ahora no se usa
+#include <time.h> //para el srand con la hora, time(NULL) da los segundos desde 1970
 
 
 typedef struct {
@@ -11,7 +11,7 @@ typedef struct {
     int size;
     int *bloques;
     int nBloques;
-    int bloqueIndice; //nuevo: solo para indexada, el bloque que guarda los punteros, -1 si no tiene
+    int bloqueIndice; //solo lo usa indexada, es el bloque donde van los punteros (-1 si no tiene)
 } Archivo;
 
 //para guardar y luego usar los archivos los voy a guardar en un arreglo dinámico
@@ -21,7 +21,7 @@ typedef struct {
 typedef struct { //para representar el disco
 int ocupado; //bloque libre o ocupado? como un bitmap
 int fileid;   // para saber qué archivo corresponde a cada bloque
-int siguiente; //nuevo: para enlazada, el puntero que guarda el bloque hacia el siguiente, -1 si es el último
+int siguiente; //para enlazada, a qué bloque apunta este, -1 si es el último
 } Bloque;
 
 int main(){
@@ -35,8 +35,11 @@ int archivoMin = 0;  //max y min archivo
 int archivoMax = 0;
 int capacidadArchivos = 10;// cuantos se pueden registrar al inicio
 int cantidadArchivos = 0; //cuantos están registrados actualmente 
+int t = 0; //tiempo que lleva la simulación, va de 2 en 2
 
-srand(time(NULL)); //nuevo: para que el tamaño del archivo cambie en cada ejecución
+//rand() no es aleatorio de verdad, saca siempre la misma secuencia de números
+//con srand le cambio la semilla, y si la semilla es la hora cambia en cada ejecución
+srand(time(NULL));
 
 
 printf("Mínimo del archivo?\n");
@@ -57,16 +60,29 @@ scanf("%d",&tbloque);
 
 //para sacar la cantidad de bloques voy a pasarlo todo a KB, multiplicar por 1024 es mejor que dividir por 1024, ahorras decimales
 if(tdisco <= 0 || tbloque <= 0 || tdisco*1024 < tbloque){
-    printf("Error: tamaño de disco o de bloque inválido\n"); //antes salía sin avisar
-    return 1; //antes era -1, pero el código de salida tiene que ir de 0 a 255
+    printf("Error: tamaño de disco o de bloque inválido\n"); //antes se salía sin decir nada
+    return 1; //el código de salida va de 0 a 255, con -1 terminaba en 255, el típico para error es 1
+}
+
+//subí esto antes del ciclo, el método se elige una vez y sirve para todos los archivos
+printf("Elige un método de asignación\n");
+printf("1. Contigua\n"); //antes era escribir ahora opciones
+printf("2. Enlazada\n");
+printf("3. Indexada\n");
+scanf("%d", &metodo);
+
+if(metodo < 1 || metodo > 3){
+    printf("Método inválido, debe ser 1, 2 o 3\n"); //antes estaba al final en el else
+    return 1;
 }
 
 int bloques = (tdisco*1024)/tbloque;
+int libres = bloques; //llevo la cuenta de los libres, así sé si falta espacio o es fragmentación
 //acá podemos ocupar arreglos o malloc
 
 //según leí si el usuario se pasa con el tamaño del disco a varios GB puede provocar un stack overflow
 //el heap normalmente puede crecer más, entonces podemos usar memoria dinámica en vez de un arreglo
-printf("Cantidad de bloques: %d\n", bloques); //le faltaba el espacio antes del número
+printf("Cantidad de bloques: %d\n", bloques); //le faltaba un espacio
 
 Bloque *disco = malloc(bloques * sizeof(Bloque));
 
@@ -82,31 +98,42 @@ if (disco == NULL || archivos == NULL) {
 for (int i = 0; i < bloques; i++) {
     disco[i].ocupado = 0;
     disco[i].fileid = -1;  //inicialización de campos como ninguno ocupado y todos los fileid en -1
-    disco[i].siguiente = -1; //y ningún bloque apunta a otro todavía
+    disco[i].siguiente = -1; //y que nadie apunte a nadie todavía
 }
-///////////////////ARCHIVO DE PRUEBA///////////////////////////////////////////////////
-//ya no es de 12 KB fijo: el tamaño sale al azar dentro del rango que se pidió al inicio
-archivos[0].id = 1;
-archivos[0].size = archivoMin + rand() % (archivoMax - archivoMin + 1); // tamaño en KB
-archivos[0].bloques = NULL;     // aún no tiene bloques asignados
-archivos[0].nBloques = 0;
-archivos[0].bloqueIndice = -1;
 
-cantidadArchivos++;
+//18nov ya no es un solo archivo de prueba, ahora se crea uno cada 2 segundos con tamaño random
+//dentro del rango y sigue hasta que uno no quepa, ahí se termina todo
+//el while (1) da vueltas para siempre, se sale con break cuando un archivo no cabe
+while (1) {
 
+//acá entra el realloc que tenía pensado, si se llena el arreglo lo duplico
+//realloc pide un espacio más grande en el heap, copia lo que había y suelta el viejo
+//si falla devuelve NULL pero el viejo sigue ahí, por eso lo guardo primero en nuevo y no en archivos
+if (cantidadArchivos == capacidadArchivos) {
+    capacidadArchivos *= 2;
+    Archivo *nuevo = realloc(archivos, capacidadArchivos * sizeof(Archivo));
+    if (nuevo == NULL) {
+        printf("Error de reserva de memoria\n");
+        break;
+    }
+    archivos = nuevo;
+}
 
-printf("Archivo %d: %d KB\n",archivos[0].id, archivos[0].size);
+//con este puntero me ahorro escribir archivos[cantidadArchivos] a cada rato
+//como a es puntero se usa -> en vez del punto, a->id es lo mismo que archivos[cantidadArchivos].id
+Archivo *a = &archivos[cantidadArchivos];
+a->id = cantidadArchivos + 1;
+//rand() % (archivoMax - archivoMin + 1) da algo entre 0 y archivoMax - archivoMin, al sumarle el mínimo queda dentro del rango
+a->size = archivoMin + rand() % (archivoMax - archivoMin + 1); // tamaño en KB
+a->bloques = NULL;     // aún no tiene bloques asignados
+a->nBloques = 0;
+a->bloqueIndice = -1;
 
+int asignado = 0; //se pone en 1 si el método logra meter el archivo
 
-////////////////////////////////////////////////////////////////////////////////después
+printf("\n[t=%ds] Archivo %d: %d KB\n", t, a->id, a->size);
 
-printf("Elige un método de asignación\n");
-printf("1. Contigua\n"); //antes era escribir ahora opciones
-printf("2. Enlazada\n");
-printf("3. Indexada\n");
-scanf("%d", &metodo);
-
-tarchivo = archivos[0].size; //lo saqué del if de contigua, en indexada quedaba en 0 y siempre daba 1 bloque
+tarchivo = a->size; //estaba dentro del if de contigua y en indexada quedaba en 0, por eso siempre daba 1 bloque
 
 if(metodo == 1){
     bloquesR = ceil((double)tarchivo/tbloque); //el double porque si no trunca antes de hacerle ceil 10/4 = 2 -> ceil(2) = 2
@@ -149,31 +176,37 @@ if(metodo == 1){
 
     //resultado
     if (mejorInicio == -1) {
-        printf("No hay espacio para el archivo\n");
+        //si hay libres de sobra pero ningún hueco alcanza es fragmentación externa
+        //si no, derechamente no hay espacio
+        if (libres >= bloquesR) {
+            printf("Fragmentación externa: hay %d bloques libres pero no %d seguidos\n", libres, bloquesR);
+        } else {
+            printf("No hay espacio para el archivo\n");
+        }
     }
     else {
         printf("Best espacio comienza en: %d\n", mejorInicio);
         printf("Tamaño del espacio: %d bloques\n", mejorSize);
 
-        //antes solo marcaba el disco, ahora el archivo también guarda qué bloques usa
-        archivos[0].bloques = malloc(bloquesR * sizeof(int));
-        if (archivos[0].bloques == NULL) {
+        //antes solo marcaba el disco, ahora el archivo también se acuerda de sus bloques
+        a->bloques = malloc(bloquesR * sizeof(int));
+        if (a->bloques == NULL) {
             printf("Error de reserva de memoria\n");
-            free(archivos);
-            free(disco);
-            return 1;
+            break;
         }
-        archivos[0].nBloques = bloquesR;
+        a->nBloques = bloquesR;
 
 //mejorinicio + bloquesR da el final de la cadena + 1 entonces menor que
 
     for (int i = mejorInicio; i < mejorInicio + bloquesR; i++) { 
         disco[i].ocupado = 1;
-        disco[i].fileid = archivos[0].id;
-        archivos[0].bloques[i - mejorInicio] = i; //posición i - mejorInicio = bloque lógico
+        disco[i].fileid = a->id;
+        a->bloques[i - mejorInicio] = i; //i - mejorInicio parte en 0, osea es el bloque lógico
         //para todos los espacios requeridos los llena con 1nos y llena el fileid de los bloques
         }
-        printf("Archivo %d ocupa los bloques %d a %d\n", archivos[0].id, mejorInicio, mejorInicio + bloquesR - 1);
+        printf("Archivo %d ocupa los bloques %d a %d\n", a->id, mejorInicio, mejorInicio + bloquesR - 1);
+        libres -= bloquesR;
+        asignado = 1;
     }
 
 
@@ -184,109 +217,123 @@ if(metodo == 1){
 }else if(metodo == 2){
 
     //a este hay que tener en cuenta que el puntero ocupa 4 bytes entonces es lo mismo de arriba pero al tamaño de bloque le restas los 4 bytes del puntero
-    //ahora sí: lo paso todo a bytes, cada bloque deja tbloque*1024 - 4 bytes para datos
+    //hecho, paso todo a bytes y a cada bloque le resto los 4 del puntero
     bloquesR = ceil(((double)tarchivo*1024)/(tbloque*1024 - 4));
 
-    //acá no hace falta best fit, los bloques no tienen que estar seguidos,
-    //así que tomo los primeros libres que encuentre
-    archivos[0].bloques = malloc(bloquesR * sizeof(int));
-    if (archivos[0].bloques == NULL) {
-        printf("Error de reserva de memoria\n");
-        free(archivos);
-        free(disco);
-        return 1;
-    }
-    int encontrados = 0;
-    for (int i = 0; i < bloques && encontrados < bloquesR; i++) {
-        if (disco[i].ocupado == 0) {
-            archivos[0].bloques[encontrados] = i;
-            encontrados++;
-        }
-    }
-
-    if (encontrados < bloquesR) {
+    //acá no sirve el best fit porque no tienen que estar seguidos, tomo los primeros libres que pille
+    //primero veo si alcanzan los libres, así no pido memoria para después tener que soltarla
+    if (bloquesR > libres) {
         printf("No hay espacio para el archivo\n");
-        free(archivos[0].bloques);
-        archivos[0].bloques = NULL;
     }
     else {
-        archivos[0].nBloques = bloquesR;
-        for (int k = 0; k < bloquesR; k++) {
-            disco[archivos[0].bloques[k]].ocupado = 1;
-            disco[archivos[0].bloques[k]].fileid = archivos[0].id;
-            if (k + 1 < bloquesR) {
-                disco[archivos[0].bloques[k]].siguiente = archivos[0].bloques[k + 1]; //el puntero al siguiente
+        a->bloques = malloc(bloquesR * sizeof(int));
+        if (a->bloques == NULL) {
+            printf("Error de reserva de memoria\n");
+            break;
+        }
+        int encontrados = 0;
+        for (int i = 0; i < bloques && encontrados < bloquesR; i++) {
+            if (disco[i].ocupado == 0) {
+                a->bloques[encontrados] = i;
+                encontrados++;
             }
         }
-        //muestro la cadena siguiendo los punteros del disco, como se leería de verdad
-        printf("Archivo %d (%d bloques): ", archivos[0].id, bloquesR);
-        for (int b = archivos[0].bloques[0]; b != -1; b = disco[b].siguiente) {
+
+        a->nBloques = bloquesR;
+        for (int k = 0; k < bloquesR; k++) {
+            disco[a->bloques[k]].ocupado = 1;
+            disco[a->bloques[k]].fileid = a->id;
+            if (k + 1 < bloquesR) {
+                disco[a->bloques[k]].siguiente = a->bloques[k + 1]; //el bloque guarda a cuál sigue
+            }
+        }
+        //en la clase el directorio de la enlazada solo guarda el primer y el último bloque,
+        //yo guardo todos en a->bloques para tener el seguimiento que pide la pauta,
+        //pero la muestro siguiendo los punteros del disco y no el arreglo, como se leería de verdad (acceso secuencial)
+        printf("Archivo %d (%d bloques): ", a->id, bloquesR);
+        for (int b = a->bloques[0]; b != -1; b = disco[b].siguiente) {
+            //el ? : es un if corto: si hay siguiente imprime la flecha y si no el salto de línea
             printf("%d%s", b, disco[b].siguiente != -1 ? "->" : "\n");
         }
+        libres -= bloquesR;
+        asignado = 1;
     }
 
 }else if(metodo == 3){
-    bloquesR = ceil((double)tarchivo/tbloque) + 1; //+1 por el bloque índice, ahora sí con el tamaño real
+    bloquesR = ceil((double)tarchivo/tbloque) + 1; //+1 por el bloque índice, ahora sí con el tamaño del archivo
     int datos = bloquesR - 1;
-    int punteros = tbloque * 1024 / 4; //cuantos punteros de 4 bytes caben en el bloque índice
+    int punteros = tbloque * 1024 / 4; //cuantos punteros de 4 bytes caben en un bloque índice (los 4 bytes los asumo yo, son 32 bits, alcanza para numerar muchísimos bloques)
 
     if (datos > punteros) {
         printf("El archivo no cabe en un solo bloque índice (%d punteros)\n", punteros);
     }
+    else if (bloquesR > libres) { //lo mismo que en enlazada, primero ver si alcanza
+        printf("No hay espacio para el archivo\n");
+    }
     else {
-        archivos[0].bloques = malloc(datos * sizeof(int));
-        if (archivos[0].bloques == NULL) {
+        a->bloques = malloc(datos * sizeof(int));
+        if (a->bloques == NULL) {
             printf("Error de reserva de memoria\n");
-            free(archivos);
-            free(disco);
-            return 1;
+            break;
         }
-        //igual que en enlazada tomo los primeros libres:
-        //el primero que encuentro queda como bloque índice y los demás son de datos
-        int encontrados = -1; //-1 significa que todavía falta el índice
+        //también tomo los primeros libres, el primero que encuentro queda de índice
+        //y el resto son datos, a->bloques vendría siendo lo que está escrito adentro del bloque índice
+        int encontrados = -1; //parte en -1 porque primero falta el índice
         for (int i = 0; i < bloques && encontrados < datos; i++) {
             if (disco[i].ocupado == 0) {
                 if (encontrados == -1) {
-                    archivos[0].bloqueIndice = i;
+                    a->bloqueIndice = i;
                 } else {
-                    archivos[0].bloques[encontrados] = i;
+                    a->bloques[encontrados] = i;
                 }
                 encontrados++;
             }
         }
 
-        if (encontrados < datos) {
-            printf("No hay espacio para el archivo\n");
-            free(archivos[0].bloques);
-            archivos[0].bloques = NULL;
-            archivos[0].bloqueIndice = -1;
+        a->nBloques = datos;
+        disco[a->bloqueIndice].ocupado = 1;
+        disco[a->bloqueIndice].fileid = a->id;
+        printf("Archivo %d: índice en el bloque %d | datos: ", a->id, a->bloqueIndice);
+        for (int k = 0; k < datos; k++) {
+            disco[a->bloques[k]].ocupado = 1;
+            disco[a->bloques[k]].fileid = a->id;
+            printf("%d ", a->bloques[k]);
         }
-        else {
-            archivos[0].nBloques = datos;
-            disco[archivos[0].bloqueIndice].ocupado = 1;
-            disco[archivos[0].bloqueIndice].fileid = archivos[0].id;
-            printf("Archivo %d: índice en el bloque %d | datos: ", archivos[0].id, archivos[0].bloqueIndice);
-            for (int k = 0; k < datos; k++) {
-                disco[archivos[0].bloques[k]].ocupado = 1;
-                disco[archivos[0].bloques[k]].fileid = archivos[0].id;
-                printf("%d ", archivos[0].bloques[k]);
-            }
-            printf("\n");
-        }
+        printf("\n");
+        libres -= bloquesR;
+        asignado = 1;
     }
-}else{
-    printf("Método inválido, debe ser 1, 2 o 3\n"); //antes quedaba vacío
 }
 
-//cuento cuántos quedaron ocupados para revisar que el bitmap quedó bien
+//si no se pudo meter el archivo se termina la simulación yaq asi se pide
+if (!asignado) {
+    break;
+}
+cantidadArchivos++; //ahora lo cuento solo si quedó asignado
+printf("Bloques libres: %d/%d\n", libres, bloques);
+
+sleep(2); //espera los 2 segundos para el siguiente, mientras duerme el proceso no ocupa cpu
+t += 2;
+}
+
+//cuento los ocupados para ver si el bitmap cuadra con los libres (en la clase le dicen bit vector, 0 libre y 1 ocupado)
 int ocupados = 0;
 for (int i = 0; i < bloques; i++) {
     ocupados += disco[i].ocupado;
 }
+printf("\nFin de la simulación en t=%ds\n", t);
 printf("Archivos registrados: %d | bloques ocupados: %d/%d\n", cantidadArchivos, ocupados, bloques);
 
+//falta aun por ponerrr, lo hago mañana o el viernes :p
+//después de los 30 segundos eliminar un archivo random cada 5 segundos y liberar sus bloques
+//y en esos mismos 5 segundos acceder a una posición de un archivo y contar los accesos
+//guardar la fragmentación externa y mostrar las estadísticas al final
 
-free(archivos[0].bloques); //ahora el archivo tiene memoria propia, hay que liberarla
+//ahora hay que liberar los bloques de cada archivo
+//el que falló nunca pidió memoria así que no cuenta
+for (int i = 0; i < cantidadArchivos; i++) {
+    free(archivos[i].bloques);
+}
 free(archivos);
 free(disco);
     return 0;
