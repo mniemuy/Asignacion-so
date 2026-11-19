@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h> //por el ceil hay que compilar con -lm al final, si no da error al linkear
-#include <unistd.h> //para el sleep de los 2 segundos, es de unix, no estaba en los pdf
+#include <unistd.h> //para el sleep de cada segundo, es de unix, no estaba en los pdf
 #include <string.h> //por ahora no se usa
 #include <time.h> //para el srand con la hora, time(NULL) da los segundos desde 1970
 
@@ -35,7 +35,9 @@ int archivoMin = 0;  //max y min archivo
 int archivoMax = 0;
 int capacidadArchivos = 10;// cuantos se pueden registrar al inicio
 int cantidadArchivos = 0; //cuantos están registrados actualmente 
-int t = 0; //tiempo que lleva la simulación, va de 2 en 2
+int t = 0; //tiempo que lleva la simulación, ahora va de 1 en 1
+int creados = 0; //cuantos se crearon en total, ya no es lo mismo que cantidadArchivos porque ahora se borran
+int eliminados = 0; //cuantos se borraron
 
 //rand() no es aleatorio de verdad, saca siempre la misma secuencia de números
 //con srand le cambio la semilla, y si la semilla es la hora cambia en cada ejecución
@@ -104,7 +106,52 @@ for (int i = 0; i < bloques; i++) {
 //18nov ya no es un solo archivo de prueba, ahora se crea uno cada 2 segundos con tamaño random
 //dentro del rango y sigue hasta que uno no quepa, ahí se termina todo
 //el while (1) da vueltas para siempre, se sale con break cuando un archivo no cabe
+//19nov ahora da una vuelta por segundo, porque las eliminaciones van cada 5 y el 35 o el 45 no son pares
 while (1) {
+
+//19nov después de los 30 segundos, cada 5 segundos se elimina un archivo random
+//(t - 30) % 5 == 0 se cumple en 30, 35, 40... osea cada 5 desde los 30
+if (t >= 30 && (t - 30) % 5 == 0) {
+    if (cantidadArchivos == 0) {
+        printf("\n[t=%ds] No hay archivos para eliminar\n", t);
+    }
+    else {
+        int elegido = rand() % cantidadArchivos; //uno al azar entre los que están en el disco
+        Archivo *e = &archivos[elegido];
+        int liberados = e->nBloques;
+
+        //sus bloques vuelven a 0 en el bitmap y quedan sin dueño
+        for (int k = 0; k < e->nBloques; k++) {
+            disco[e->bloques[k]].ocupado = 0;
+            disco[e->bloques[k]].fileid = -1;
+            disco[e->bloques[k]].siguiente = -1; //en enlazada también se borra el puntero
+        }
+        //en indexada falta soltar el bloque índice
+        if (e->bloqueIndice != -1) {
+            disco[e->bloqueIndice].ocupado = 0;
+            disco[e->bloqueIndice].fileid = -1;
+            liberados++;
+        }
+        libres += liberados;
+        printf("\n[t=%ds] Se elimina el archivo %d (%d KB), se liberan %d bloques | libres: %d/%d\n",
+               t, e->id, e->size, liberados, libres, bloques);
+
+        free(e->bloques); //su arreglo de bloques ya no sirve
+        //para no dejar un hoyo en el arreglo el último archivo pasa a su lugar,
+        //el orden da lo mismo porque cada uno tiene su id
+        archivos[elegido] = archivos[cantidadArchivos - 1];
+        cantidadArchivos--;
+        eliminados++;
+    }
+}
+
+//los archivos se siguen creando cada 2 segundos, en los impares solo se espera
+//el continue se salta lo que queda del while y pasa a la siguiente vuelta
+if (t % 2 != 0) {
+    sleep(1);
+    t++;
+    continue;
+}
 
 //acá entra el realloc que tenía pensado, si se llena el arreglo lo duplico
 //realloc pide un espacio más grande en el heap, copia lo que había y suelta el viejo
@@ -122,7 +169,7 @@ if (cantidadArchivos == capacidadArchivos) {
 //con este puntero me ahorro escribir archivos[cantidadArchivos] a cada rato
 //como a es puntero se usa -> en vez del punto, a->id es lo mismo que archivos[cantidadArchivos].id
 Archivo *a = &archivos[cantidadArchivos];
-a->id = cantidadArchivos + 1;
+a->id = creados + 1; //antes era cantidadArchivos + 1, pero al borrar se repetían los id
 //rand() % (archivoMax - archivoMin + 1) da algo entre 0 y archivoMax - archivoMin, al sumarle el mínimo queda dentro del rango
 a->size = archivoMin + rand() % (archivoMax - archivoMin + 1); // tamaño en KB
 a->bloques = NULL;     // aún no tiene bloques asignados
@@ -310,10 +357,11 @@ if (!asignado) {
     break;
 }
 cantidadArchivos++; //ahora lo cuento solo si quedó asignado
+creados++;
 printf("Bloques libres: %d/%d\n", libres, bloques);
 
-sleep(2); //espera los 2 segundos para el siguiente, mientras duerme el proceso no ocupa cpu
-t += 2;
+sleep(1); //antes era sleep(2), ahora espera 1 segundo por vuelta, mientras duerme el proceso no ocupa cpu
+t++;
 }
 
 //cuento los ocupados para ver si el bitmap cuadra con los libres (en la clase le dicen bit vector, 0 libre y 1 ocupado)
@@ -322,11 +370,13 @@ for (int i = 0; i < bloques; i++) {
     ocupados += disco[i].ocupado;
 }
 printf("\nFin de la simulación en t=%ds\n", t);
-printf("Archivos registrados: %d | bloques ocupados: %d/%d\n", cantidadArchivos, ocupados, bloques);
+//ahora que se borran archivos muestro creados y eliminados aparte de los que quedaron
+printf("Archivos creados: %d | eliminados: %d | en disco: %d\n", creados, eliminados, cantidadArchivos);
+printf("Bloques ocupados: %d/%d\n", ocupados, bloques);
 
 //falta aun por ponerrr, lo hago mañana o el viernes :p
-//después de los 30 segundos eliminar un archivo random cada 5 segundos y liberar sus bloques
-//y en esos mismos 5 segundos acceder a una posición de un archivo y contar los accesos
+//19nov la eliminación ya quedó
+//en los mismos 5 segundos acceder a una posición de un archivo y contar los accesos
 //guardar la fragmentación externa y mostrar las estadísticas al final
 
 //ahora hay que liberar los bloques de cada archivo
