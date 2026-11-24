@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <math.h> //por el ceil hay que compilar con -lm al final, si no da error al linkear
 #include <unistd.h> //para el sleep de cada segundo, es de unix, no estaba en los pdf
-#include <string.h> //por ahora no se usa
 #include <time.h> //para el srand con la hora, time(NULL) da los segundos desde 1970
 
 
@@ -11,7 +10,8 @@ typedef struct {
     int size;
     int *bloques;
     int nBloques;
-    int bloqueIndice; //solo lo usa indexada, es el bloque donde van los punteros (-1 si no tiene)
+    int bloqueIndice; //solo lo usa indexada, es el primer bloque donde van los punteros (-1 si no tiene)
+    int nIndices; //24nov cuantos bloques índice usa, si no caben en uno se encadenan
 } Archivo;
 
 //para guardar y luego usar los archivos los voy a guardar en un arreglo dinámico
@@ -22,6 +22,7 @@ typedef struct { //para representar el disco
 int ocupado; //bloque libre o ocupado? como un bitmap
 int fileid;   // para saber qué archivo corresponde a cada bloque
 int siguiente; //para enlazada, a qué bloque apunta este, -1 si es el último
+               //en indexada lo uso igual pero para encadenar los bloques índice
 } Bloque;
 
 //23nov esto lo hice función porque lo uso en dos partes, al crear y al eliminar
@@ -80,25 +81,15 @@ int huecos = 0;
 //con srand le cambio la semilla, y si la semilla es la hora cambia en cada ejecución
 srand(time(NULL));
 
-
-printf("Mínimo del archivo?\n");
-scanf("%d", &archivoMin);
-
-printf("Máximo del archivo?\n");
-scanf("%d", &archivoMax);
-
-if(archivoMin <= 0 || archivoMax < archivoMin){
-    printf("Error de rango\n");
-    return 1;
-}
-
+//24nov ahora pido los datos en el orden de la pauta: disco, bloque, método y al final el rango
 printf("Tamaño de disco en MB:\n");
 scanf(" %d",&tdisco);
 printf("Tamaño de bloques en KB:\n");
 scanf("%d",&tbloque);
 
 //para sacar la cantidad de bloques voy a pasarlo todo a KB, multiplicar por 1024 es mejor que dividir por 1024, ahorras decimales
-if(tdisco <= 0 || tbloque <= 0 || tdisco*1024 < tbloque){
+//el disco hasta 1 TB (1048576 MB), más que eso tdisco*1024 se empieza a pasar del int
+if(tdisco <= 0 || tbloque <= 0 || tdisco > 1048576 || tdisco*1024 < tbloque){
     printf("Error: tamaño de disco o de bloque inválido\n"); //antes se salía sin decir nada
     return 1; //el código de salida va de 0 a 255, con -1 terminaba en 255, el típico para error es 1
 }
@@ -115,6 +106,18 @@ if(metodo < 1 || metodo > 3){
     return 1;
 }
 
+//el rango lo bajé para acá, antes era lo primero que se pedía
+printf("Mínimo del archivo?\n");
+scanf("%d", &archivoMin);
+
+printf("Máximo del archivo?\n");
+scanf("%d", &archivoMax);
+
+if(archivoMin <= 0 || archivoMax < archivoMin){
+    printf("Error de rango\n");
+    return 1;
+}
+
 int bloques = (tdisco*1024)/tbloque;
 int libres = bloques; //llevo la cuenta de los libres, así sé si falta espacio o es fragmentación
 //acá podemos ocupar arreglos o malloc
@@ -122,6 +125,13 @@ int libres = bloques; //llevo la cuenta de los libres, así sé si falta espacio
 //según leí si el usuario se pasa con el tamaño del disco a varios GB puede provocar un stack overflow
 //el heap normalmente puede crecer más, entonces podemos usar memoria dinámica en vez de un arreglo
 printf("Cantidad de bloques: %d\n", bloques); //le faltaba un espacio
+
+//igual con un disco gigante y bloques chicos son demasiados bloques, el malloc puede pasar
+//pero después al recorrerlos se queda sin ram, así que pongo un tope de unos 16 millones
+if (bloques > 16777216) {
+    printf("Son demasiados bloques, usa bloques más grandes\n");
+    return 1;
+}
 
 Bloque *disco = malloc(bloques * sizeof(Bloque));
 
@@ -163,11 +173,16 @@ if (t >= 30 && (t - 30) % 5 == 0) {
             disco[e->bloques[k]].fileid = -1;
             disco[e->bloques[k]].siguiente = -1; //en enlazada también se borra el puntero
         }
-        //en indexada falta soltar el bloque índice
-        if (e->bloqueIndice != -1) {
-            disco[e->bloqueIndice].ocupado = 0;
-            disco[e->bloqueIndice].fileid = -1;
+        //en indexada falta soltar los bloques índice, ahora pueden ser varios
+        //así que voy siguiendo la cadena desde el primero hasta que llegue a -1
+        int idx = e->bloqueIndice;
+        while (idx != -1) {
+            int sig = disco[idx].siguiente; //lo guardo antes porque abajo lo borro
+            disco[idx].ocupado = 0;
+            disco[idx].fileid = -1;
+            disco[idx].siguiente = -1;
             liberados++;
+            idx = sig;
         }
         libres += liberados;
         printf("\n[t=%ds] Se elimina el archivo %d (%d KB), se liberan %d bloques | libres: %d/%d\n",
@@ -214,6 +229,8 @@ if (t >= 30 && (t - 30) % 5 == 0) {
         int desplazamiento = posicion % datosPorBloque; //y en qué byte de ese bloque
         int fisico = -1;
         int accesos = 0;
+        int indiceUsado = -1; //solo para indexada, en qué bloque índice estaba el puntero
+        int cualIndice = 0;
 
         if (metodo == 1) {
             //contigua: inicio + bloque lógico, se llega directo con 1 acceso
@@ -232,12 +249,27 @@ if (t >= 30 && (t - 30) % 5 == 0) {
         }
         else {
             //indexada: leo el bloque índice y ahí sale directo cuál es, osea índice + dato = 2 accesos
+            //24nov pero si el archivo tiene varios índices, primero hay que llegar al que corresponde
+            //cada índice guarda punteros - 1 bloques porque la última entrada apunta al siguiente índice
+            int porIndice = tbloque * 1024 / 4 - 1;
+            cualIndice = bloqueLogico / porIndice; //0 si está en el primero, 1 en el segundo...
+            int idx = x->bloqueIndice;
+            accesos = 1; //leer el primer índice
+            for (int k = 0; k < cualIndice; k++) {
+                idx = disco[idx].siguiente; //salto al siguiente índice, otro acceso
+                accesos++;
+            }
+            //la entrada bloqueLogico % porIndice de ese índice dice el bloque físico
             fisico = x->bloques[bloqueLogico];
-            accesos = 2;
+            accesos++; //y leer el dato
+            indiceUsado = idx;
         }
 
         printf("[t=%ds] Acceso al archivo %d (%d KB): posición lógica %d B -> bloque lógico %d, byte %d -> bloque físico %d | accesos: %d\n",
                t, x->id, x->size, posicion, bloqueLogico, desplazamiento, fisico, accesos);
+        if (metodo == 3) {
+            printf("(el puntero estaba en el índice %d de %d del archivo, que es el bloque %d)\n", cualIndice + 1, x->nIndices, indiceUsado);
+        }
         totalAccesos += accesos;
         cantidadAccesos++;
     }
@@ -273,6 +305,7 @@ a->size = archivoMin + rand() % (archivoMax - archivoMin + 1); // tamaño en KB
 a->bloques = NULL;     // aún no tiene bloques asignados
 a->nBloques = 0;
 a->bloqueIndice = -1;
+a->nIndices = 0;
 
 int asignado = 0; //se pone en 1 si el método logra meter el archivo
 
@@ -405,14 +438,15 @@ if(metodo == 1){
     }
 
 }else if(metodo == 3){
-    bloquesR = ceil((double)tarchivo/tbloque) + 1; //+1 por el bloque índice, ahora sí con el tamaño del archivo
-    int datos = bloquesR - 1;
+    int datos = ceil((double)tarchivo/tbloque); //bloques de datos, ahora sí con el tamaño del archivo
     int punteros = tbloque * 1024 / 4; //cuantos punteros de 4 bytes caben en un bloque índice (los 4 bytes los asumo yo, son 32 bits, alcanza para numerar muchísimos bloques)
+    //24nov antes si no cabía en un índice se terminaba todo, ahora se encadenan varios índices
+    //la última entrada de cada índice apunta al siguiente, así que cada uno guarda punteros - 1 datos
+    int porIndice = punteros - 1;
+    int nIndices = (datos + porIndice - 1) / porIndice; //ceil con enteros
+    bloquesR = datos + nIndices;
 
-    if (datos > punteros) {
-        printf("El archivo no cabe en un solo bloque índice (%d punteros)\n", punteros);
-    }
-    else if (bloquesR > libres) { //lo mismo que en enlazada, primero ver si alcanza
+    if (bloquesR > libres) { //lo mismo que en enlazada, primero ver si alcanza
         printf("No hay espacio para el archivo\n");
     }
     else {
@@ -421,24 +455,38 @@ if(metodo == 1){
             printf("Error de reserva de memoria\n");
             break;
         }
-        //también tomo los primeros libres, el primero que encuentro queda de índice
-        //y el resto son datos, a->bloques vendría siendo lo que está escrito adentro del bloque índice
-        int encontrados = -1; //parte en -1 porque primero falta el índice
+        //también tomo los primeros libres, los primeros que encuentro quedan de índice
+        //y el resto son datos, a->bloques vendría siendo lo que está escrito adentro de los índices
+        int indicesListos = 0;
+        int encontrados = 0;
+        int anterior = -1; //el índice anterior, para encadenarlo con el nuevo
         for (int i = 0; i < bloques && encontrados < datos; i++) {
             if (disco[i].ocupado == 0) {
-                if (encontrados == -1) {
-                    a->bloqueIndice = i;
+                if (indicesListos < nIndices) {
+                    if (anterior == -1) {
+                        a->bloqueIndice = i; //el primero queda en el archivo
+                    } else {
+                        disco[anterior].siguiente = i; //los demás se cuelgan del anterior
+                    }
+                    disco[i].ocupado = 1;
+                    disco[i].fileid = a->id;
+                    anterior = i;
+                    indicesListos++;
                 } else {
                     a->bloques[encontrados] = i;
+                    encontrados++;
                 }
-                encontrados++;
             }
         }
 
         a->nBloques = datos;
-        disco[a->bloqueIndice].ocupado = 1;
-        disco[a->bloqueIndice].fileid = a->id;
-        printf("Archivo %d: índice en el bloque %d | datos: ", a->id, a->bloqueIndice);
+        a->nIndices = nIndices;
+        //muestro los índices siguiendo la cadena, igual que en enlazada
+        printf("Archivo %d: índice(s) ", a->id);
+        for (int b = a->bloqueIndice; b != -1; b = disco[b].siguiente) {
+            printf("%d%s", b, disco[b].siguiente != -1 ? "->" : "");
+        }
+        printf(" | datos: ");
         for (int k = 0; k < datos; k++) {
             disco[a->bloques[k]].ocupado = 1;
             disco[a->bloques[k]].fileid = a->id;
@@ -532,7 +580,7 @@ printf("==============================================\n");
 //19nov la eliminación ya quedó
 //23nov el acceso también
 //23nov y la fragmentación con las estadísticas, con eso está lo de la pauta
-//lo único que me quedó: en indexada si un archivo necesita más de un bloque índice se termina
+//24nov y lo de los varios bloques índice en indexada, ya no falta nada
 
 //ahora hay que liberar los bloques de cada archivo
 //el que falló nunca pidió memoria así que no cuenta
