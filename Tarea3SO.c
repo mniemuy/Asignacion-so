@@ -24,6 +24,36 @@ int fileid;   // para saber qué archivo corresponde a cada bloque
 int siguiente; //para enlazada, a qué bloque apunta este, -1 si es el último
 } Bloque;
 
+//23nov esto lo hice función porque lo uso en dos partes, al crear y al eliminar
+//recorre el bitmap contando los huecos (bloques libres seguidos), igual que el best fit
+//devuelve la fragmentación externa en %: 1 - mayor hueco / libres totales
+//mayorHueco y huecos van con puntero para que la función me pueda devolver más de un valor
+double fragmentacionExterna(Bloque *disco, int bloques, int *mayorHueco, int *huecos) {
+    int libresTotal = 0;
+    int largo = 0; //largo del hueco que voy recorriendo
+    *mayorHueco = 0;
+    *huecos = 0;
+    for (int i = 0; i < bloques; i++) {
+        if (disco[i].ocupado == 0) {
+            if (largo == 0) {
+                (*huecos)++; //empieza un hueco nuevo
+            }
+            largo++;
+            libresTotal++;
+            if (largo > *mayorHueco) {
+                *mayorHueco = largo;
+            }
+        }
+        else {
+            largo = 0; //se cortó el hueco
+        }
+    }
+    if (libresTotal == 0) {
+        return 0; //disco lleno, no hay libres que estén fragmentados
+    }
+    return 100.0 * (1.0 - (double)*mayorHueco / libresTotal);
+}
+
 int main(){
 
 int tdisco = 0; //tamaño del disco
@@ -40,6 +70,11 @@ int creados = 0; //cuantos se crearon en total, ya no es lo mismo que cantidadAr
 int eliminados = 0; //cuantos se borraron
 int totalAccesos = 0; //suma de los accesos que se hicieron, para sacar el promedio
 int cantidadAccesos = 0; //cuantas veces se accedió a un archivo
+double sumaFrag = 0; //para el registro de la fragmentación externa: suma, máxima y cuantas mediciones
+double maxFrag = 0;
+int registrosFrag = 0;
+int mayorHueco = 0; //estos dos los llena la función de fragmentación
+int huecos = 0;
 
 //rand() no es aleatorio de verdad, saca siempre la misma secuencia de números
 //con srand le cambio la semilla, y si la semilla es la hora cambia en cada ejecución
@@ -144,6 +179,18 @@ if (t >= 30 && (t - 30) % 5 == 0) {
         archivos[elegido] = archivos[cantidadArchivos - 1];
         cantidadArchivos--;
         eliminados++;
+
+        //al borrar quedan huecos, así que acá también se mide la fragmentación
+        double frag = fragmentacionExterna(disco, bloques, &mayorHueco, &huecos);
+        if (metodo != 1) {
+            frag = 0; //en enlazada e indexada sirve cualquier libre, la clase dice que no hay fragmentación externa
+        }
+        sumaFrag += frag;
+        registrosFrag++;
+        if (frag > maxFrag) {
+            maxFrag = frag;
+        }
+        printf("Huecos libres: %d | mayor hueco: %d bloques | frag. externa: %.2f %%\n", huecos, mayorHueco, frag);
     }
 }
 
@@ -409,7 +456,18 @@ if (!asignado) {
 }
 cantidadArchivos++; //ahora lo cuento solo si quedó asignado
 creados++;
-printf("Bloques libres: %d/%d\n", libres, bloques);
+
+//cada vez que entra un archivo se mide la fragmentación externa y se guarda para el promedio
+double frag = fragmentacionExterna(disco, bloques, &mayorHueco, &huecos);
+if (metodo != 1) {
+    frag = 0; //lo mismo que al eliminar, solo en contigua cuenta
+}
+sumaFrag += frag;
+registrosFrag++;
+if (frag > maxFrag) {
+    maxFrag = frag;
+}
+printf("Bloques libres: %d/%d | huecos: %d | mayor hueco: %d | frag. externa: %.2f %%\n", libres, bloques, huecos, mayorHueco, frag);
 
 sleep(1); //antes era sleep(2), ahora espera 1 segundo por vuelta, mientras duerme el proceso no ocupa cpu
 t++;
@@ -420,21 +478,61 @@ int ocupados = 0;
 for (int i = 0; i < bloques; i++) {
     ocupados += disco[i].ocupado;
 }
-printf("\nFin de la simulación en t=%ds\n", t);
+//23nov ordené todo lo del final como estadísticas, con lo que pide el punto 4 de la pauta
+//utilización del disco, creados y eliminados, fragmentación externa y promedio de accesos
+//sumo lo que pesan los archivos que quedaron y la fragmentación interna (lo que sobra en su último bloque)
+int datosPorBloque = tbloque * 1024;
+if (metodo == 2) {
+    datosPorBloque -= 4; //igual que en el acceso, en enlazada cada bloque tiene 4 bytes menos
+}
+long long kbGuardados = 0;
+long long fragInterna = 0; //en bytes
+for (int i = 0; i < cantidadArchivos; i++) {
+    kbGuardados += archivos[i].size;
+    fragInterna += (long long)archivos[i].nBloques * datosPorBloque - (long long)archivos[i].size * 1024;
+}
+double fragFinal = fragmentacionExterna(disco, bloques, &mayorHueco, &huecos);
+if (metodo != 1) {
+    fragFinal = 0;
+}
+
+printf("\n================ ESTADÍSTICAS ================\n");
+printf("Fin de la simulación en t=%ds\n", t);
+//el ? : de nuevo, para poner el nombre del método en vez del número
+printf("Método: %s | %d bloques de %d KB\n", metodo == 1 ? "contigua" : metodo == 2 ? "enlazada" : "indexada", bloques, tbloque);
+
+printf("\n-- Archivos --\n");
 //ahora que se borran archivos muestro creados y eliminados aparte de los que quedaron
-printf("Archivos creados: %d | eliminados: %d | en disco: %d\n", creados, eliminados, cantidadArchivos);
-printf("Bloques ocupados: %d/%d\n", ocupados, bloques);
+printf("Creados: %d | eliminados: %d | en disco: %d\n", creados, eliminados, cantidadArchivos);
+
+printf("\n-- Utilización del disco --\n");
+printf("Bloques ocupados: %d/%d (%.2f %%)\n", ocupados, bloques, 100.0 * ocupados / bloques);
+printf("Datos guardados: %lld KB de %d KB que tiene el disco en bloques\n", kbGuardados, bloques * tbloque);
+printf("Fragmentación interna: %lld bytes sin usar en los últimos bloques\n", fragInterna);
+
+printf("\n-- Fragmentación externa --\n");
+//el promedio y la máxima salen del registro que se fue llenando en cada creación y eliminación
+printf("Al final: %.2f %% | promedio: %.2f %% | máxima: %.2f %% (%d mediciones)\n",
+       fragFinal, registrosFrag > 0 ? sumaFrag / registrosFrag : 0.0, maxFrag, registrosFrag);
+printf("Huecos libres: %d | mayor hueco: %d bloques\n", huecos, mayorHueco);
+if (metodo != 1) {
+    printf("(en enlazada e indexada no hay fragmentación externa, cualquier bloque libre sirve)\n");
+}
+
+printf("\n-- Accesos --\n");
 //el promedio solo si hubo accesos, si se termina antes de los 30 segundos no hay ninguno y sería dividir por 0
 if (cantidadAccesos > 0) {
     printf("Accesos: %d | promedio de accesos para encontrar el bloque: %.2f\n", cantidadAccesos, (double)totalAccesos / cantidadAccesos);
 } else {
     printf("Accesos: 0, terminó antes de los 30 segundos\n");
 }
+printf("==============================================\n");
 
 //falta aun por ponerrr, lo hago mañana o el viernes :p
 //19nov la eliminación ya quedó
 //23nov el acceso también
-//guardar la fragmentación externa y mostrar las estadísticas al final
+//23nov y la fragmentación con las estadísticas, con eso está lo de la pauta
+//lo único que me quedó: en indexada si un archivo necesita más de un bloque índice se termina
 
 //ahora hay que liberar los bloques de cada archivo
 //el que falló nunca pidió memoria así que no cuenta
