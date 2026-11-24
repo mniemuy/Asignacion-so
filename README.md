@@ -3,40 +3,26 @@
 Simulador de asignación de archivos en disco con asignación contigua, enlazada e indexada.
 Los archivos no se crean de verdad, solo se lleva la cuenta de qué bloques usa cada uno y dónde quedan.
 
-## Compilar
+Va pidiendo los datos en el mismo orden de la pauta:
 
-Tiene que ser en linux o algo unix, con gcc:
-
-```
-gcc -Wall -Wextra Tarea3SO.c -o Tarea3SO -lm
-```
-
-El -lm va al final porque se usa ceil de math.h, si no se pone no compila.
-
-## Ejecutar
-
-```
-./Tarea3SO
-```
-
-Va pidiendo los datos en este orden:
-
-- mínimo del archivo en KB
-- máximo del archivo en KB
 - tamaño del disco en MB
 - tamaño de los bloques en KB
 - el método: 1 contigua, 2 enlazada o 3 indexada
+- mínimo del archivo en KB
+- máximo del archivo en KB
 
-Si no se quieren escribir uno por uno se pueden pasar de una. Por ejemplo archivos de 16 a 64 KB,
-disco de 1 MB, bloques de 4 KB y enlazada:
+Si no se quieren escribir uno por uno se pueden pasar de una. Por ejemplo disco de 1 MB, bloques de
+4 KB, enlazada y archivos de 16 a 64 KB:
 
 ```
-printf '16\n64\n1\n4\n2\n' | ./Tarea3SO
+printf '1\n4\n2\n16\n64\n' | ./Tarea3SO
 ```
 
-Si el rango está malo, el bloque es más grande que el disco o el método no es 1, 2 o 3, avisa y se cierra.
+Si el disco o el bloque están malos (el bloque más grande que el disco, o un disco de más de 1 TB), el
+método no es 1, 2 o 3 o el rango está malo, avisa y se cierra. También se cierra si salen demasiados
+bloques (más de unos 16 millones), en ese caso hay que usar bloques más grandes.
 
-## Cómo funciona
+## Cómo funciona todo
 
 El disco se divide en bloques (disco / bloque) y se guarda en un arreglo de structs Bloque. Cada bloque
 dice si está libre u ocupado, osea funciona como el bitmap (en la clase le dicen bit vector), de qué
@@ -65,7 +51,10 @@ bloque k hay que partir del primero e ir siguiendo los punteros, son k + 1 acces
 
 Indexada: también sirve cualquier bloque libre, pero aparte se usa un bloque índice donde van los
 punteros a los bloques de datos. Para leer cualquier bloque se lee el índice y después el dato, son 2
-accesos.
+accesos. Si el archivo es muy grande y los punteros no caben en un solo índice, se usan varios y se
+encadenan: la última entrada de cada índice apunta al siguiente, así que cada uno guarda (bloque / 4) - 1
+bloques de datos. En ese caso hay que ir pasando por los índices hasta llegar al que corresponde, son
+los índices recorridos + 1 accesos.
 
 Es lo mismo que la tabla del f.txt de la clase de file system.
 
@@ -96,7 +85,7 @@ en contigua, porque hay libres pero ningún hueco seguido alcanza (fragmentació
 
 ## Limitaciones
 
-- en indexada cada archivo tiene un solo bloque índice. Si un archivo necesita más punteros de los que
-  caben (bloque / 4), la simulación se termina con ese aviso
 - los tiempos son de verdad (sleep), entonces con un disco grande y archivos chicos se puede demorar
   harto en llenarse
+- los datos se leen con scanf, así que si se escribe algo que no es número queda en 0 y el programa
+  avisa que el dato está malo y se cierra
