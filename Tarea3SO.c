@@ -38,6 +38,8 @@ int cantidadArchivos = 0; //cuantos están registrados actualmente
 int t = 0; //tiempo que lleva la simulación, ahora va de 1 en 1
 int creados = 0; //cuantos se crearon en total, ya no es lo mismo que cantidadArchivos porque ahora se borran
 int eliminados = 0; //cuantos se borraron
+int totalAccesos = 0; //suma de los accesos que se hicieron, para sacar el promedio
+int cantidadAccesos = 0; //cuantas veces se accedió a un archivo
 
 //rand() no es aleatorio de verdad, saca siempre la misma secuencia de números
 //con srand le cambio la semilla, y si la semilla es la hora cambia en cada ejecución
@@ -142,6 +144,55 @@ if (t >= 30 && (t - 30) % 5 == 0) {
         archivos[elegido] = archivos[cantidadArchivos - 1];
         cantidadArchivos--;
         eliminados++;
+    }
+}
+
+//23nov en los mismos segundos de la eliminación se accede a una posición de un archivo random
+//la idea es la tabla de la clase con f.txt: contigua 1 acceso, enlazada seguir la cadena e indexada 2
+if (t >= 30 && (t - 30) % 5 == 0) {
+    if (cantidadArchivos == 0) {
+        printf("[t=%ds] No hay archivos para acceder\n", t);
+    }
+    else {
+        Archivo *x = &archivos[rand() % cantidadArchivos];
+        //la posición lógica es un byte del archivo, entre 0 y su tamaño en bytes - 1
+        //lo paso a long long porque size * 1024 se puede pasar del int con archivos grandes
+        int posicion = rand() % ((long long)x->size * 1024);
+
+        int datosPorBloque = tbloque * 1024;
+        if (metodo == 2) {
+            datosPorBloque -= 4; //en enlazada cada bloque tiene 4 bytes menos por el puntero
+        }
+        int bloqueLogico = posicion / datosPorBloque; //en qué bloque del archivo cae la posición
+        int desplazamiento = posicion % datosPorBloque; //y en qué byte de ese bloque
+        int fisico = -1;
+        int accesos = 0;
+
+        if (metodo == 1) {
+            //contigua: inicio + bloque lógico, se llega directo con 1 acceso
+            fisico = x->bloques[0] + bloqueLogico;
+            accesos = 1;
+        }
+        else if (metodo == 2) {
+            //enlazada: parto del primero y voy siguiendo los punteros del disco,
+            //cada bloque que leo es un acceso, osea bloque lógico + 1 accesos
+            fisico = x->bloques[0];
+            accesos = 1;
+            for (int k = 0; k < bloqueLogico; k++) {
+                fisico = disco[fisico].siguiente;
+                accesos++;
+            }
+        }
+        else {
+            //indexada: leo el bloque índice y ahí sale directo cuál es, osea índice + dato = 2 accesos
+            fisico = x->bloques[bloqueLogico];
+            accesos = 2;
+        }
+
+        printf("[t=%ds] Acceso al archivo %d (%d KB): posición lógica %d B -> bloque lógico %d, byte %d -> bloque físico %d | accesos: %d\n",
+               t, x->id, x->size, posicion, bloqueLogico, desplazamiento, fisico, accesos);
+        totalAccesos += accesos;
+        cantidadAccesos++;
     }
 }
 
@@ -373,10 +424,16 @@ printf("\nFin de la simulación en t=%ds\n", t);
 //ahora que se borran archivos muestro creados y eliminados aparte de los que quedaron
 printf("Archivos creados: %d | eliminados: %d | en disco: %d\n", creados, eliminados, cantidadArchivos);
 printf("Bloques ocupados: %d/%d\n", ocupados, bloques);
+//el promedio solo si hubo accesos, si se termina antes de los 30 segundos no hay ninguno y sería dividir por 0
+if (cantidadAccesos > 0) {
+    printf("Accesos: %d | promedio de accesos para encontrar el bloque: %.2f\n", cantidadAccesos, (double)totalAccesos / cantidadAccesos);
+} else {
+    printf("Accesos: 0, terminó antes de los 30 segundos\n");
+}
 
 //falta aun por ponerrr, lo hago mañana o el viernes :p
 //19nov la eliminación ya quedó
-//en los mismos 5 segundos acceder a una posición de un archivo y contar los accesos
+//23nov el acceso también
 //guardar la fragmentación externa y mostrar las estadísticas al final
 
 //ahora hay que liberar los bloques de cada archivo
